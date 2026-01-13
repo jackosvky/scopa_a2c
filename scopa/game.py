@@ -40,6 +40,10 @@ class ScoponeGame2P:
         self.last_move_was_scopa: bool = False
         self.last_move_player: Optional[int] = None
 
+        # For observation of previous move:
+        self.last_played_card: Optional[Card] = None
+        self.last_move_captured: bool = False
+
         self.reset()
 
     # ------------------------------------------------------------------ #
@@ -63,6 +67,8 @@ class ScoponeGame2P:
         self.done = False
         self.last_move_was_scopa = False
         self.last_move_player = None
+        self.last_played_card = None
+        self.last_move_captured = False
 
         self._deal_initial()
 
@@ -154,6 +160,10 @@ class ScoponeGame2P:
             if played_card.rank != 1 and len(self.table) == 0:
                 scopa_made = True
                 player.scopas += 1
+
+        # Bookkeeping for observations
+        self.last_played_card = played_card
+        self.last_move_captured = bool(captured)
 
         # Bookkeeping for "last move Scopa removal"
         self.last_move_was_scopa = scopa_made
