@@ -11,6 +11,42 @@ from scopone import ScoponeEnv
 
 
 # ------------------------------------------------------------- #
+# Utility: flatten dict observation into a vector
+# ------------------------------------------------------------- #
+
+def flatten_obs(obs_dict):
+    """
+    Flatten the structured observation dict from ScoponeEnv into a 1D vector.
+    Layout (for reference):
+      hand: [9,4,10]    -> 360
+      hand_mask: [9]    -> 9
+      table: [10,4,10]  -> 400
+      table_mask: [10]  -> 10
+      prev_card: [4,10] -> 40
+      prev_captured: [1]
+      prev_scopa: [1]
+      current_player: [2]
+      episode: [2]
+      remaining_deck: [1]
+      score_stats: [8]
+    Total: 360+9+400+10+40+1+1+2+2+1+8 = 834
+    """
+    return np.concatenate([
+        obs_dict["hand"].reshape(-1),
+        obs_dict["hand_mask"],
+        obs_dict["table"].reshape(-1),
+        obs_dict["table_mask"],
+        obs_dict["prev_card"].reshape(-1),
+        obs_dict["prev_captured"],
+        obs_dict["prev_scopa"],
+        obs_dict["current_player"],
+        obs_dict["episode"],
+        obs_dict["remaining_deck"],
+        obs_dict["score_stats"],
+    ]).astype(np.float32)
+
+
+# ------------------------------------------------------------- #
 # A2C LSTM Policy
 # ------------------------------------------------------------- #
 
@@ -66,13 +102,16 @@ def run_episode(
     policy: A2CLSTMPolicy,
     device: torch.device,
     gamma: float = 0.99,
-) -> Tuple[float, int]:
+):
     """
     Run one episode, collect transitions, do one A2C update.
 
-    Returns: (episode_return, episode_length)
+    Returns:
+      ep_return, ep_len, obs_batch, actions_batch, log_probs_batch,
+      values_batch, returns_batch, advantages_batch
     """
-    obs, _ = env.reset()
+    obs_dict, _ = env.reset()
+    obs = flatten_obs(obs_dict)
     done = False
     truncated = False
 
@@ -89,17 +128,15 @@ def run_episode(
     ep_len = 0
 
     while not (done or truncated):
+        hand_slot_mask = obs_dict["hand_mask"]  # [9]
+
         obs_tensor = torch.from_numpy(obs).float().to(device).unsqueeze(0).unsqueeze(0)  # [1,1,obs_dim]
         logits, value, hidden = policy(obs_tensor, hidden)
         logits = logits[:, -1, :]        # [1, action_dim]
         value = value[:, -1]             # [1]
 
-        # Mask invalid actions (hand slots with no card) using obs structure:
-        # hand_slot_mask is at index: we know obs structure in ScoponeEnv: last 183 dims,
-        # but simplest: decode mask from obs: it's at positions 160..168
-        hand_slot_mask = obs[160:160+9]  # 9 elements
+        # Mask invalid actions (hand slots with no card)
         logit_np = logits.detach().cpu().numpy().reshape(-1)
-        # set logits for invalid slots to a large negative
         for i in range(len(hand_slot_mask)):
             if hand_slot_mask[i] < 0.5:
                 logit_np[i] = -1e9
@@ -109,7 +146,8 @@ def run_episode(
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
-        next_obs, reward, done, truncated, info = env.step(int(action.item()))
+        next_obs_dict, reward, done, truncated, info = env.step(int(action.item()))
+        next_obs = flatten_obs(next_obs_dict)
 
         obs_list.append(obs_tensor.squeeze(0))  # [1, obs_dim]
         actions.append(action)
@@ -122,6 +160,7 @@ def run_episode(
         ep_return += reward
         ep_len += 1
 
+        obs_dict = next_obs_dict
         obs = next_obs
 
     # Convert to tensors
@@ -157,7 +196,10 @@ def train(
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env = ScoponeEnv()
-    obs_dim = env.observation_space.shape[0]
+
+    # Use a dummy reset to get obs_dim
+    obs_dict, _ = env.reset()
+    obs_dim = flatten_obs(obs_dict).shape[0]
     action_dim = env.action_space.n
 
     policy = A2CLSTMPolicy(obs_dim, action_dim, hidden_dim=128).to(device)
