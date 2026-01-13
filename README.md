@@ -1,4 +1,4 @@
-# scopone_a2c
+# scopone_a2c ** In Development **
 
 Reinforcement learning agent for the Italian card game **Scopone** (Val Seriana variant), using **PyTorch + Gymnasium** and an **A2C + LSTM** architecture.
 
